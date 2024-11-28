@@ -25,14 +25,19 @@ LDFLAGS = -g
 MKMEMEFS_OBJS = $(MKMEMEFS_SRCS:.c=.o)
 MEMEFS_OBJS = $(MEMEFS_SRCS:.c=.o)
 
-all: memefs
+all: $(MKMEMEFS_BIN) $(MEMEFS_BIN)
 
-# Build
-memefs: memefs.o
-    gcc -o memefs memefs.o -lfuse3
+# Build mkmemefs
+$(MKMEMEFS_BIN): $(MKMEMEFS_OBJS)
+	$(CC) -o $@ $(MKMEMEFS_OBJS) $(LDFLAGS)
+
+# Build memefs
+$(MEMEFS_BIN): $(MEMEFS_OBJS)
+	$(CC) -o $@ $(MEMEFS_OBJS) $(LDFLAGS) -lfuse3
 
 %.o: %.c
 	$(CC) -c $< -o $@ $(CFLAGS)
 
 clean:
-	rm -f memefs.o memefs
+	rm -f $(MKMEMEFS_OBJS) $(MEMEFS_OBJS)
+	rm -f $(MKMEMEFS_BIN) $(MEMEFS_BIN)

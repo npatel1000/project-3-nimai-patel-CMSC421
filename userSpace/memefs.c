@@ -5,225 +5,160 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <time.h>
 
 #define BLOCK_SIZE 512
 #define VOLUME_SIZE (256 * BLOCK_SIZE)
+#define MAX_FILES 224
+#define FAT_ENTRIES 256
 
-typedef struct { //example
+typedef struct { //example file entry
     char name[256];
     size_t size;
-    char *content;
+    uint16_t start_block;
+    time_t timestamp;
 } memefs_file;
 
-static memefs_file dummy_file = {
-    .name = "testfile",
-    .size = 15,
-    .content = "Hello, MEMEfs!\n\n"
-};
+typedef struct {
+    char signature[16];
+    uint8_t cleanly_unmounted;
+    uint8_t reserved[3];
+    uint32_t fs_version;
+    uint8_t fs_ctime[8];
+    uint16_t main_fat;
+    uint16_t main_fat_size;
+    uint16_t backup_fat;
+    uint16_t backup_fat_size;
+    uint16_t directory_start;
+    uint16_t directory_size;
+    uint16_t num_user_blocks;
+    uint16_t first_user_block;
+    char volume_label[16];
+    uint8_t unused[448];
+} __attribute__((packed)) memefs_superblock;
 
-static int memefs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
-    (void)fi; //for unused parameter warning
+static uint16_t fat[FAT_ENTRIES]; //global variables
+static memefs_file directory[MAX_FILES];
+static FILE *image_file = NULL;
 
-    printf("getattr called for path: %s\n", path);
-
-    memset(stbuf, 0, sizeof(struct stat));
-
-    if (strcmp(path, "/") == 0) { //directory and file attributes
-        stbuf->st_mode = S_IFDIR | 0755;
-        stbuf->st_nlink = 2;
-    } else if (strcmp(path, "/testfile") == 0) {
-        stbuf->st_mode = S_IFREG | 0444;
-        stbuf->st_nlink = 1;
-        stbuf->st_size = dummy_file.size;
-    } else {
-        return -ENOENT; //file not found
-    }
-
-    return 0;
+void load_fat() { //load FAT table
+    fseek(image_file, 254 * BLOCK_SIZE, SEEK_SET);
+    fread(fat, sizeof(uint16_t), FAT_ENTRIES, image_file);
 }
 
-static int memefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+void load_directory() { //load directory 
+    fseek(image_file, 253 * BLOCK_SIZE, SEEK_SET);
+    fread(directory, sizeof(memefs_file), MAX_FILES, image_file);
+}
+
+void sync_fat() { //sync FAT to img
+    fseek(image_file, 254 * BLOCK_SIZE, SEEK_SET);
+    fwrite(fat, sizeof(uint16_t), FAT_ENTRIES, image_file);
+}
+
+void sync_directory() { //sync directory to img
+    fseek(image_file, 253 * BLOCK_SIZE, SEEK_SET);
+    fwrite(directory, sizeof(memefs_file), MAX_FILES, image_file);
+}
+
+void sync_superblock() { //sync superblock (main and backup)
+    memefs_superblock sb;
+    memset(&sb, 0, sizeof(sb));
+
+    strcpy(sb.signature, "?MEMEFS++CMSC421"); //superblock fields
+    sb.cleanly_unmounted = 0xFF;
+    sb.fs_version = htonl(1);
+
+    fseek(image_file, 255 * BLOCK_SIZE, SEEK_SET); //write main superblock
+    fwrite(&sb, sizeof(sb), 1, image_file);
+
+    fseek(image_file, 0, SEEK_SET); //write backup superblock
+    fwrite(&sb, sizeof(sb), 1, image_file);
+}
+
+static int memefs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) { //get file attributes (FUSE)
+    (void)fi;
+    memset(stbuf, 0, sizeof(struct stat));
+
+    if (strcmp(path, "/") == 0) { //root directory
+        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_nlink = 2;
+        return 0;
+    }
+
+    for (int i = 0; i < MAX_FILES; i++) { //search for file in directory
+        if (strcmp(directory[i].name, path + 1) == 0) {
+            stbuf->st_mode = S_IFREG | 0644;
+            stbuf->st_nlink = 1;
+            stbuf->st_size = directory[i].size;
+            return 0;
+        }
+    }
+    return -ENOENT; //file not found
+}
+
+static int memefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi, enum fuse_readdir_flags flags) { //read directory content (FUSE)
     (void)offset;
     (void)fi;
     (void)flags;
 
-    printf("readdir called for path: %s\n", path);
+    if (strcmp(path, "/") != 0) return -ENOENT;
 
-    if (strcmp(path, "/") != 0)
-        return -ENOENT;
+    filler(buf, ".", NULL, 0, 0); //add current and parent directories
+    filler(buf, "..", NULL, 0, 0);
 
-    filler(buf, ".", NULL, 0, 0); //current directory
-    filler(buf, "..", NULL, 0, 0); //parent directory
-    filler(buf, dummy_file.name, NULL, 0, 0); //add dummy file
-    
-    printf("Content being read: %.*s\n", (int)dummy_file.size, dummy_file.content);
-
+    for (int i = 0; i < MAX_FILES; i++) { //add files from directory
+        if (directory[i].name[0] != '\0') {
+            filler(buf, directory[i].name, NULL, 0, 0);
+        }
+    }
     return 0;
 }
 
-static int memefs_open(const char *path, struct fuse_file_info *fi) {
-    (void)fi;
-
-    printf("open called for path: %s\n", path);
-
-    if (strcmp(path + 1, dummy_file.name) != 0)
-        return -ENOENT;
-
-    return 0;
-}
-
-static int memefs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    (void)fi;
-
-    printf("read called for path: %s, size: %lu, offset: %ld\n", path, size, offset);
-
-    if (strcmp(path + 1, dummy_file.name) != 0)
-        return -ENOENT;
-
-    if ((size_t)offset >= dummy_file.size)
-        return 0;
-
-    size_t to_read = (size > (dummy_file.size - (size_t)offset)) ? (dummy_file.size - (size_t)offset) : size;
-    memcpy(buf, dummy_file.content + offset, to_read);
-
-    return to_read;
-}
-
-static int memefs_access(const char *path, int mask) {
-    (void)mask;
-    
-    printf("access called for path: %s\n", path);
-
-    if (strcmp(path, "/") == 0 || strcmp(path, "/testfile") == 0) { //validate existence
-        return 0;
+static int memefs_open(const char *path, struct fuse_file_info *fi) { //open file (FUSE)
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (strcmp(directory[i].name, path + 1) == 0) {
+            return 0;
+        }
     }
     return -ENOENT;
 }
 
-static int memefs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+static int memefs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) { //read data from file (FUSE)
     (void)fi;
-    printf("create called for path: %s, mode: %o\n", path, mode);
 
-    if (strlen(path + 1) > 255) { // Validate filename length
-        return -ENAMETOOLONG;
-    }
-
-    for (int i = 0; i < 224; ++i) { //find unused directory (224 entries)
-        if (directory[i].file_type == 0x0000) {
-            memset(&directory[i], 0, sizeof(directory_entry_t));
-            strncpy(directory[i].name, path + 1, 255);
-            directory[i].file_type = 0x8000;
-            directory[i].size = 0;
-            directory[i].start_block = 0;
-            directory[i].timestamp = get_current_timestamp();
-            update_fat();
-            sync_superblock();
-            return 0;
-        }
-    }
-
-    return -ENOSPC; //no space left
-}
-
-static int memefs_unlink(const char *path) {
-    printf("unlink called for path: %s\n", path);
-
-    for (int i = 0; i < 224; ++i) {
+    for (int i = 0; i < MAX_FILES; i++) { //search for file in directory
         if (strcmp(directory[i].name, path + 1) == 0) {
-            int block = directory[i].start_block; //free blocks
-            while (block != 0xFFFF) {
-                int next = fat[block];
-                fat[block] = 0x0000; //block = free
-                block = next;
-            }
+            if ((size_t)offset >= directory[i].size) return 0;
 
-            memset(&directory[i], 0, sizeof(directory_entry_t)); //clear directory entry
-            update_fat();
-            sync_superblock();
-            return 0;
+            size_t to_read = size;
+            if (offset + size > directory[i].size) to_read = directory[i].size - offset;
+
+            fseek(image_file, directory[i].start_block * BLOCK_SIZE + offset, SEEK_SET); //read file from img
+            fread(buf, 1, to_read, image_file);
+
+            return to_read;
         }
     }
-
     return -ENOENT; //file not found
 }
 
-static int memefs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+static int memefs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) { //write data to file (FUSE)
     (void)fi;
-    printf("write called for path: %s, size: %lu, offset: %ld\n", path, size, offset);
 
-    for (int i = 0; i < 224; ++i) {
+    for (int i = 0; i < MAX_FILES; i++) { //search for file in directory
         if (strcmp(directory[i].name, path + 1) == 0) {
-            size_t bytes_written = 0;
-            int block = directory[i].start_block;
+            fseek(image_file, directory[i].start_block * BLOCK_SIZE + offset, SEEK_SET);
+            fwrite(buf, 1, size, image_file);
 
-            while (offset > BLOCK_SIZE) { //navigate to correct block
-                if (fat[block] == 0xFFFF) {
-                    block = allocate_new_block(block);
-                } else {
-                    block = fat[block];
-                }
-                offset -= BLOCK_SIZE;
-            }
-
-            while (bytes_written < size) { //write data to blocks
-                size_t to_write = (size - bytes_written) < (BLOCK_SIZE - offset) ? (size - bytes_written) : (BLOCK_SIZE - offset);
-                memcpy(&disk[block][offset], buf + bytes_written, to_write);
-                bytes_written += to_write;
-                offset = 0;
-
-                if (bytes_written < size) {
-                    block = allocate_new_block(block);
-                }
-            }
-
-            directory[i].size += bytes_written;
-            directory[i].timestamp = get_current_timestamp();
+            directory[i].size += size; //update file size
+            sync_directory();
             sync_superblock();
-            return bytes_written;
+
+            return size;
         }
     }
-
-    return -ENOENT; //file not found
-}
-
-static int memefs_truncate(const char *path, off_t size) {
-    printf("truncate called for path: %s, size: %ld\n", path, size);
-
-    for (int i = 0; i < 224; ++i) {
-        if (strcmp(directory[i].name, path + 1) == 0) {
-            if ((size_t)size < directory[i].size) {
-                int block = directory[i].start_block; //free extra blocks
-                while (size > BLOCK_SIZE) {
-                    block = fat[block];
-                    size -= BLOCK_SIZE;
-                }
-
-                int next_block = fat[block];
-                fat[block] = 0xFFFF;
-
-                while (next_block != 0xFFFF) {
-                    int tmp = fat[next_block];
-                    fat[next_block] = 0x0000;
-                    next_block = tmp;
-                }
-            } else if ((size_t)size > directory[i].size) {
-                int block = directory[i].start_block; //allocate new blocks
-                while (fat[block] != 0xFFFF) {
-                    block = fat[block];
-                }
-
-                while (directory[i].size < (size_t)size) {
-                    block = allocate_new_block(block);
-                    directory[i].size += BLOCK_SIZE;
-                }
-            }
-
-            directory[i].timestamp = get_current_timestamp();
-            sync_superblock();
-            return 0;
-        }
-    }
-
     return -ENOENT; //file not found
 }
 
@@ -232,52 +167,25 @@ static const struct fuse_operations memefs_oper = {
     .readdir = memefs_readdir,
     .open = memefs_open,
     .read = memefs_read,
-    .access = memefs_access,
+    .write = memefs_write,
 };
 
-int allocate_new_block(int current_block) {
-    for (int i = 1; i < 201; ++i) {
-        if (fat[i] == 0x0000) {
-            fat[i] = 0xFFFF;
-            if (current_block != -1) {
-                fat[current_block] = i;
-            }
-            return i;
-        }
-    }
-    return -ENOSPC; //no space left
-}
-
-uint8_t get_current_timestamp() {
-    time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-
-    return (uint8_t[]) {
-        pbcd((tm->tm_year + 1900) / 100),
-        pbcd((tm->tm_year + 1900) % 100),
-        pbcd(tm->tm_mon + 1),
-        pbcd(tm->tm_mday),
-        pbcd(tm->tm_hour),
-        pbcd(tm->tm_min),
-        pbcd(tm->tm_sec),
-        0
-    };
-}
-
-int main(int argc, char *argv[]) {
-    printf("argc: %d\n", argc);
-    for (int i = 0; i < argc; i++) {
-        printf("argv[%d]: %s\n", i, argv[i]);
-    }
-
+int main(int argc, char *argv[]) { 
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s <image-file> <mount-point> [options]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <image-file> <mount-point>\n", argv[0]);
         return 1;
     }
 
-    struct fuse_args args = FUSE_ARGS_INIT(argc - 1, argv + 1);
+    image_file = fopen(argv[1], "r+b"); //open file system 
+    if (!image_file) {
+        perror("fopen");
+        return 1;
+    }
 
+    load_fat(); //load FAT and directory
+    load_directory();
+
+    struct fuse_args args = FUSE_ARGS_INIT(argc - 1, argv + 1); //FUSE main loop
     return fuse_main(args.argc, args.argv, &memefs_oper, NULL);
 }
-
 
