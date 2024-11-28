@@ -1,5 +1,6 @@
 #define FUSE_USE_VERSION 35
 #include <fuse3/fuse.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -117,6 +118,7 @@ static int memefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, o
 }
 
 static int memefs_open(const char *path, struct fuse_file_info *fi) { //open file (FUSE)
+    (void)fi;
     for (int i = 0; i < MAX_FILES; i++) {
         if (strcmp(directory[i].name, path + 1) == 0) {
             return 0;
