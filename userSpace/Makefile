@@ -1,8 +1,14 @@
+###################################################################
+#NOTE: doing 2 seperate builds because of main functions.         #
+###################################################################
+
 # Add the names of your .c files from your assignment here.
-SRCS = mkmemefs.c
+MKMEMEFS_SRCS = mkmemefs.c
+MEMEFS_SRCS = memefs.c
 
 # This line is the name of the program you are building
-BIN = mkmemefs
+MKMEMEFS_BIN = mkmemefs
+MEMEFS_BIN = memefs
 
 # Compiler flags to pass to the system's C compiler while building
 # the source files
@@ -15,16 +21,23 @@ LDFLAGS = -g
 ###################################################################
 # You shouldn't need to touch anything below this line...         #
 ###################################################################
-OBJS = $(SRCS:.c=.o)
 
-all: $(BIN)
+MKMEMEFS_OBJS = $(MKMEMEFS_SRCS:.c=.o)
+MEMEFS_OBJS = $(MEMEFS_SRCS:.c=.o)
+
+all: $(MKMEMEFS_BIN) $(MEMEFS_BIN)
+
+# Build mkmemefs
+$(MKMEMEFS_BIN): $(MKMEMEFS_OBJS)
+	$(CC) -o $@ $(MKMEMEFS_OBJS) $(LDFLAGS)
+
+# Build memefs
+$(MEMEFS_BIN): $(MEMEFS_OBJS)
+	$(CC) -o $@ $(MEMEFS_OBJS) $(LDFLAGS) -lfuse3
 
 %.o: %.c
 	$(CC) -c $< -o $@ $(CFLAGS)
 
-$(BIN): $(OBJS)
-	$(CC) -o $@ $(OBJS) $(LDFLAGS)
-
 clean:
-	-rm -f $(OBJS)
-	-rm -f $(BIN)
+	rm -f $(MKMEMEFS_OBJS) $(MEMEFS_OBJS)
+	rm -f $(MKMEMEFS_BIN) $(MEMEFS_BIN)
