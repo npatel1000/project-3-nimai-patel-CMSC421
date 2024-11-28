@@ -17,8 +17,8 @@ typedef struct { //example
 
 static memefs_file dummy_file = {
     .name = "testfile",
-    .size = 14,
-    .content = "Hello, MEMEfs!\n"
+    .size = 15,
+    .content = "Hello, MEMEfs!\n\n"
 };
 
 static int memefs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
@@ -56,6 +56,8 @@ static int memefs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, o
     filler(buf, ".", NULL, 0, 0); //current directory
     filler(buf, "..", NULL, 0, 0); //parent directory
     filler(buf, dummy_file.name, NULL, 0, 0); //add dummy file
+    
+    printf("Content being read: %.*s\n", (int)dummy_file.size, dummy_file.content);
 
     return 0;
 }
