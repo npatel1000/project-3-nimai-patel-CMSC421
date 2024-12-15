@@ -1,0 +1,1 @@
+cmd_/usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.ko := ld -r -m elf_x86_64 -z noexecstack --build-id=sha1  -T scripts/module.lds -o /usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.ko /usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.o /usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.mod.o;  true

@@ -1,0 +1,1 @@
+cmd_/usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.mod := { echo  /usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.o;  echo; } > /usr/src/project-3-nimai-patel/kernelSpace/memefs_kernel.mod

@@ -1,0 +1,1 @@
+cmd_/usr/src/project-3-nimai-patel/kernelSpace/Module.symvers := sed 's/\.ko$$/\.o/' /usr/src/project-3-nimai-patel/kernelSpace/modules.order | scripts/mod/modpost -m   -o /usr/src/project-3-nimai-patel/kernelSpace/Module.symvers -e -i Module.symvers   -T -

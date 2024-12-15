@@ -14,7 +14,7 @@ MODULE_VERSION("1.0");
 
 static DEFINE_MUTEX(memefs_mutex);
 
-static int memefs_open(struct inode *inode, struct file *file) { //file operations
+static int memefs_open(struct inode *inode, struct file *file) {
     printk(KERN_INFO "MEMEfs: File opened.\n");
     return 0;
 }
@@ -28,12 +28,17 @@ static ssize_t memefs_write(struct file *file, const char __user *buf, size_t le
     char *kernel_buf;
     size_t bytes_not_copied;
 
+    printk(KERN_INFO "MEMEfs: Write called with length = %zu.\n", len);
+
     kernel_buf = kmalloc(len, GFP_KERNEL);
-    if (!kernel_buf)
+    if (!kernel_buf) {
+        printk(KERN_ERR "MEMEfs: Memory allocation failed for write buffer.\n");
         return -ENOMEM;
+    }
 
     bytes_not_copied = copy_from_user(kernel_buf, buf, len);
     if (bytes_not_copied) {
+        printk(KERN_ERR "MEMEfs: Failed to copy data from user space. Bytes not copied = %zu.\n", bytes_not_copied);
         kfree(kernel_buf);
         return -EFAULT;
     }
@@ -58,18 +63,20 @@ static char *memefs_name = "memefs";
 
 static int __init memefs_init(void) {
     printk(KERN_INFO "MEMEfs: Initializing the MEMEfs kernel module.\n");
+
     major_num = register_chrdev(0, memefs_name, &memefs_fops);
     if (major_num < 0) {
         printk(KERN_ERR "MEMEfs: Failed to register a major number.\n");
         return major_num;
     }
+
     printk(KERN_INFO "MEMEfs: Registered with major number %d.\n", major_num);
     return 0;
 }
 
 static void __exit memefs_exit(void) {
-    unregister_chrdev(major_num, memefs_name);
     printk(KERN_INFO "MEMEfs: Cleaning up the MEMEfs kernel module.\n");
+    unregister_chrdev(major_num, memefs_name);
 }
 
 module_init(memefs_init);
