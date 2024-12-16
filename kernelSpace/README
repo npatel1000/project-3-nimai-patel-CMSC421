@@ -1,0 +1,42 @@
+1. Clean & Compile
+make clean && make
+
+2. Insert Module
+sudo insmod memefs_kernal.ko
+
+3. Make sure module is loaded
+lsmod | grep memefs
+
+4. Check Major Number
+sudo dmesg | grep "Registered with major number"
+
+5. Create Device File
+sudo mknod /dev/memefs c 247 0
+sudo chmod 666 /dev/memefs
+
+6. Make sure device node is created
+ls -l /dev/memefs
+
+7. Create
+echo "Creating a new file" > /dev/memefs
+
+8. Write
+echo "Appending data to the file" >> /dev/memefs
+
+9. Read
+cat /dev/memefs
+
+10. Delete
+sudo rm /dev/memefs
+
+11. Remove device node
+sudo rm /dev/memefs
+
+12. Unload module
+sudo rmmod memefs_kernel
+
+13. Make sure it's unloaded
+lsmod | grep memefs
+
+14. Check logs
+sudo dmesg | tail
