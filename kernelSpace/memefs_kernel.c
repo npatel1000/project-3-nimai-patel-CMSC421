@@ -37,12 +37,12 @@ static DEFINE_MUTEX(memefs_mutex);
 
 static int find_free_block(void) {
     int i;
-    for (i = 1; i < MEMEFS_NUM_BLOCKS; i++) { //block 0 = metadata
+    for (i = 1; i < MEMEFS_NUM_BLOCKS; i++) {
         if (fat_table[i].next_block == 0xFFFF) {
             return i;
         }
     }
-    return -ENOSPC; //no free blocks
+    return -ENOSPC;
 }
 
 static int find_free_directory_entry(void) {
@@ -98,14 +98,14 @@ static int memefs_unlink(struct inode *dir, struct dentry *dentry) {
         if (directory[i].is_used &&
             strncmp(directory[i].name, dentry->d_name.name, 64) == 0) {
 
-            block = directory[i].start_block; //free FAT blocks
+            block = directory[i].start_block;
             while (block > 0 && block < MEMEFS_NUM_BLOCKS) {
                 next = fat_table[block].next_block;
-                fat_table[block].next_block = 0xFFFF; //mark free
+                fat_table[block].next_block = 0xFFFF;
                 block = next;
             }
 
-            memset(&directory[i], 0, sizeof(directory[i])); //free directory entry
+            memset(&directory[i], 0, sizeof(directory[i]));
             mutex_unlock(&memefs_mutex);
             return 0;
         }
