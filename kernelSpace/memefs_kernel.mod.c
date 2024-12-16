@@ -30,12 +30,11 @@ __used __section("__versions") = {
 	{ 0x798ab62f, "module_layout" },
 	{ 0x6bc3fbc0, "__unregister_chrdev" },
 	{ 0xb6730837, "__register_chrdev" },
+	{ 0x6b10bee1, "_copy_to_user" },
 	{ 0x3213f038, "mutex_unlock" },
-	{ 0x4dfa8d4b, "mutex_lock" },
-	{ 0x37a0cba, "kfree" },
 	{ 0x13c49cc2, "_copy_from_user" },
 	{ 0x88db9f48, "__check_object_size" },
-	{ 0xeb233a45, "__kmalloc" },
+	{ 0x4dfa8d4b, "mutex_lock" },
 	{ 0x5b8239ca, "__x86_return_thunk" },
 	{ 0x92997ed8, "_printk" },
 	{ 0xbdfb6dbb, "__fentry__" },
@@ -44,4 +43,4 @@ __used __section("__versions") = {
 MODULE_INFO(depends, "");
 
 
-MODULE_INFO(srcversion, "0A3B3AB8B81A350B3C6F702");
+MODULE_INFO(srcversion, "C8EEBC44E47C2FE64395E41");

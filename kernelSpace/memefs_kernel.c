@@ -67,7 +67,7 @@ static ssize_t memefs_read(struct file *file, char __user *buf, size_t len, loff
         return 0;
     }
 
-    bytes_to_copy = min(len, data_size - *off);
+    bytes_to_copy = min(len, data_size - (size_t)(*off)); //check both operands in min are same type
 
     if (copy_to_user(buf, device_buffer + *off, bytes_to_copy)) {
         printk(KERN_ERR "MEMEfs: Failed to copy data to user space.\n");
