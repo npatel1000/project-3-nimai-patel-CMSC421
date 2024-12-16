@@ -6,111 +6,223 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
+#include <linux/types.h>
+#include <linux/time.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Nimai Patel");
 MODULE_DESCRIPTION("MEMEfs kernel module");
 MODULE_VERSION("1.0");
 
+#define MEMEFS_BLOCK_SIZE 512
+#define MEMEFS_NUM_BLOCKS 256
+#define MEMEFS_MAX_FILES 224
+
+struct memefs_fat_entry {
+    uint16_t next_block;
+};
+
+struct memefs_dir_entry {
+    char name[64];
+    uint16_t start_block;
+    size_t size;
+    struct timespec64 timestamp;
+    bool is_used;
+};
+
+static struct memefs_fat_entry fat_table[MEMEFS_NUM_BLOCKS];
+static struct memefs_dir_entry directory[MEMEFS_MAX_FILES];
+static char *memefs_storage;
 static DEFINE_MUTEX(memefs_mutex);
 
-#define BUFFER_SIZE 512
-static char device_buffer[BUFFER_SIZE];
-static size_t data_size = 0;
-
-static int memefs_open(struct inode *inode, struct file *file) {
-    printk(KERN_INFO "MEMEfs: File opened.\n");
-    return 0;
+static int find_free_block(void) {
+    int i;
+    for (i = 1; i < MEMEFS_NUM_BLOCKS; i++) { //block 0 = metadata
+        if (fat_table[i].next_block == 0xFFFF) {
+            return i;
+        }
+    }
+    return -ENOSPC; //no free blocks
 }
 
-static int memefs_release(struct inode *inode, struct file *file) {
-    printk(KERN_INFO "MEMEfs: File closed.\n");
-    return 0;
+static int find_free_directory_entry(void) {
+    int i;
+    for (i = 0; i < MEMEFS_MAX_FILES; i++) {
+        if (!directory[i].is_used) {
+            return i;
+        }
+    }
+    return -ENOSPC;
 }
 
-static ssize_t memefs_write(struct file *file, const char __user *buf, size_t len, loff_t *off) {
-    size_t bytes_not_copied;
+static int memefs_create(struct user_namespace *ns, struct inode *dir,
+                         struct dentry *dentry, umode_t mode, bool excl) {
+    int dir_idx, block_idx;
 
-    printk(KERN_INFO "MEMEfs: Write called with length = %zu.\n", len);
-
-    if (len > BUFFER_SIZE) {
-        printk(KERN_ERR "MEMEfs: Write size exceeds buffer capacity.\n");
-        return -EINVAL;
+    if (dentry->d_name.len > 63) {
+        return -ENAMETOOLONG;
     }
 
     mutex_lock(&memefs_mutex);
 
-    bytes_not_copied = copy_from_user(device_buffer, buf, len);
-    if (bytes_not_copied) {
-        printk(KERN_ERR "MEMEfs: Failed to copy data from user space. Bytes not copied = %zu.\n", bytes_not_copied);
+    dir_idx = find_free_directory_entry();
+    if (dir_idx < 0) {
         mutex_unlock(&memefs_mutex);
-        return -EFAULT;
+        return dir_idx;
     }
 
-    device_buffer[len] = '\0'; //null terminate (debugging)
-    data_size = len;
-    printk(KERN_INFO "MEMEfs: Writing data - %s\n", device_buffer);
+    block_idx = find_free_block();
+    if (block_idx < 0) {
+        mutex_unlock(&memefs_mutex);
+        return block_idx;
+    }
+
+    directory[dir_idx].is_used = true;
+    directory[dir_idx].start_block = block_idx;
+    directory[dir_idx].size = 0;
+    strncpy(directory[dir_idx].name, dentry->d_name.name, 64);
+    ktime_get_real_ts64(&directory[dir_idx].timestamp);
+
+    fat_table[block_idx].next_block = 0; //mark end of chain
 
     mutex_unlock(&memefs_mutex);
-    return len;
+    return 0;
 }
 
-static ssize_t memefs_read(struct file *file, char __user *buf, size_t len, loff_t *off) {
-    size_t bytes_to_copy;
-
-    printk(KERN_INFO "MEMEfs: Read called with length = %zu.\n", len);
+static int memefs_unlink(struct inode *dir, struct dentry *dentry) {
+    int i, block, next;
 
     mutex_lock(&memefs_mutex);
 
-    if (*off >= data_size) { //check if offset > data size
-        mutex_unlock(&memefs_mutex);
-        return 0;
+    for (i = 0; i < MEMEFS_MAX_FILES; i++) {
+        if (directory[i].is_used &&
+            strncmp(directory[i].name, dentry->d_name.name, 64) == 0) {
+
+            block = directory[i].start_block; //free FAT blocks
+            while (block > 0 && block < MEMEFS_NUM_BLOCKS) {
+                next = fat_table[block].next_block;
+                fat_table[block].next_block = 0xFFFF; //mark free
+                block = next;
+            }
+
+            memset(&directory[i], 0, sizeof(directory[i])); //free directory entry
+            mutex_unlock(&memefs_mutex);
+            return 0;
+        }
     }
 
-    bytes_to_copy = min(len, data_size - (size_t)(*off)); //check both operands in min are same type
+    mutex_unlock(&memefs_mutex);
+    return -ENOENT;
+}
 
-    if (copy_to_user(buf, device_buffer + *off, bytes_to_copy)) {
-        printk(KERN_ERR "MEMEfs: Failed to copy data to user space.\n");
+static ssize_t memefs_write(struct file *file, const char __user *buf,
+                            size_t len, loff_t *off) {
+    size_t bytes_to_copy;
+    int block, next_block;
+    struct memefs_dir_entry *file_entry;
+
+    if (!file->private_data) {
+        return -EBADF;
+    }
+
+    mutex_lock(&memefs_mutex);
+
+    file_entry = file->private_data;
+    block = file_entry->start_block;
+    while (*off >= MEMEFS_BLOCK_SIZE) {
+        if (fat_table[block].next_block == 0) {
+            next_block = find_free_block();
+            if (next_block < 0) {
+                mutex_unlock(&memefs_mutex);
+                return next_block;
+            }
+            fat_table[block].next_block = next_block;
+        }
+        block = fat_table[block].next_block;
+        *off -= MEMEFS_BLOCK_SIZE;
+    }
+
+    bytes_to_copy = min(len, (size_t)(MEMEFS_BLOCK_SIZE - *off));
+    if (copy_from_user(memefs_storage + (block * MEMEFS_BLOCK_SIZE) + *off,
+                       buf, bytes_to_copy)) {
         mutex_unlock(&memefs_mutex);
         return -EFAULT;
     }
 
     *off += bytes_to_copy;
-    printk(KERN_INFO "MEMEfs: Read returned %zu bytes.\n", bytes_to_copy);
-
+    file_entry->size = max(file_entry->size, (size_t)*off);
     mutex_unlock(&memefs_mutex);
     return bytes_to_copy;
 }
 
-static struct file_operations memefs_fops = {
-    .owner = THIS_MODULE,
-    .open = memefs_open,
-    .release = memefs_release,
-    .write = memefs_write,
-    .read = memefs_read,
-};
+static ssize_t memefs_read(struct file *file, char __user *buf, size_t len,
+                           loff_t *off) {
+    size_t bytes_to_copy;
+    int block;
+    struct memefs_dir_entry *file_entry;
 
-static int major_num;
-static char *memefs_name = "memefs";
-
-static int __init memefs_init(void) {
-    printk(KERN_INFO "MEMEfs: Initializing the MEMEfs kernel module.\n");
-
-    major_num = register_chrdev(0, memefs_name, &memefs_fops);
-    if (major_num < 0) {
-        printk(KERN_ERR "MEMEfs: Failed to register a major number.\n");
-        return major_num;
+    if (!file->private_data) {
+        return -EBADF;
     }
 
-    printk(KERN_INFO "MEMEfs: Registered with major number %d.\n", major_num);
+    mutex_lock(&memefs_mutex);
+
+    file_entry = file->private_data;
+    block = file_entry->start_block;
+    while (*off >= MEMEFS_BLOCK_SIZE) {
+        if (fat_table[block].next_block == 0) {
+            mutex_unlock(&memefs_mutex);
+            return 0; //end of file
+        }
+        block = fat_table[block].next_block;
+        *off -= MEMEFS_BLOCK_SIZE;
+    }
+
+    bytes_to_copy = min(len, (size_t)(MEMEFS_BLOCK_SIZE - *off));
+    if (copy_to_user(buf,
+                     memefs_storage + (block * MEMEFS_BLOCK_SIZE) + *off,
+                     bytes_to_copy)) {
+        mutex_unlock(&memefs_mutex);
+        return -EFAULT;
+    }
+
+    *off += bytes_to_copy;
+    mutex_unlock(&memefs_mutex);
+    return bytes_to_copy;
+}
+
+static const struct inode_operations memefs_inode_operations = {
+    .create = memefs_create,
+    .unlink = memefs_unlink,
+};
+
+static const struct file_operations memefs_file_operations = {
+    .read = memefs_read,
+    .write = memefs_write,
+};
+
+static int __init memefs_init(void) {
+    int i;
+
+    printk(KERN_INFO "MEMEfs: Initializing.\n");
+
+    memefs_storage = kzalloc(MEMEFS_BLOCK_SIZE * MEMEFS_NUM_BLOCKS,
+                             GFP_KERNEL);
+    if (!memefs_storage) {
+        return -ENOMEM;
+    }
+
+    for (i = 0; i < MEMEFS_NUM_BLOCKS; i++) {
+        fat_table[i].next_block = 0xFFFF;
+    }
+
     return 0;
 }
 
 static void __exit memefs_exit(void) {
-    printk(KERN_INFO "MEMEfs: Cleaning up the MEMEfs kernel module.\n");
-    unregister_chrdev(major_num, memefs_name);
+    printk(KERN_INFO "MEMEfs: Exiting.\n");
+    kfree(memefs_storage);
 }
 
 module_init(memefs_init);
 module_exit(memefs_exit);
-
